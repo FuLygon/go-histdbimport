@@ -11,3 +11,9 @@ world"
 cruel\
 \
 world"
+
+envycontrol -q
+cd /etc/NetworkManager/system-connections
+sudo pacman -Syu
+yay -Syu
+spicetify backup apply
