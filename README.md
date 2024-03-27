@@ -5,7 +5,7 @@
 An tool for importing old zsh history into [histdb](https://github.com/larkery/zsh-histdb)
 
 ## Environment Variable
-For histfile without timestamp, current timestamp will be used as timestamp for every entry, this will make the order of the commands in database after import different from the histfile, to preseve this order, use env `PRESERVE_ORDER`.
+For histfile without timestamp, current timestamp will be used as timestamp for every entry, this will make the order of the commands in database after import different from the histfile, to preserve this order, use env `PRESERVE_ORDER`.
 ```shell
 $ export PRESERVE_ORDER=true
 ```
