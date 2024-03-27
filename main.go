@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"database/sql"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -107,23 +108,31 @@ func readEntry(s *bufio.Scanner, buf *bytes.Buffer) (string, bool, error) {
 
 // Parses an entry string into a basicEntry
 func parseEntry(entry string, timestamp int64) (basicEntry, error) {
-	//data := strings.SplitN(entry, ";", 2)
-	//if data == nil || len(data) != 2 {
-	//	return basicEntry{}, errors.New("Unable to parse entry= " + entry)
-	//}
-	//info := strings.Split(data[0], ":")
-	//if info == nil || len(info) != 3 {
-	//	return basicEntry{}, errors.New("Unable to parse timestamp=" + data[0])
-	//}
+	var entryInfo basicEntry
 
-	stamp := fmt.Sprintf("%d", time.Now().Unix())
-	//duration := strings.TrimSpace(info[2])
-	//cmd := data[1]
-	return basicEntry{
-		started:  stamp,
-		duration: "0",
-		cmd:      entry,
-	}, nil
+	data := strings.SplitN(entry, ";", 2)
+	if data == nil || len(data) != 2 {
+		return basicEntry{}, errors.New("Unable to parse entry= " + entry)
+	}
+
+	if len(data) == 2 {
+		// processing histfile with timestamp
+		info := strings.Split(data[0], ":")
+		if info == nil || len(info) != 3 {
+			return basicEntry{}, errors.New("Unable to parse timestamp=" + data[0])
+		}
+
+		entryInfo.started = strings.TrimSpace(info[1])
+		entryInfo.duration = strings.TrimSpace(info[2])
+		entryInfo.cmd = data[1]
+	} else {
+		// processing histfile without timestamp
+		entryInfo.started = fmt.Sprintf("%d", timestamp)
+		entryInfo.duration = "0"
+		entryInfo.cmd = entry
+	}
+
+	return entryInfo, nil
 }
 
 type transaction struct {
@@ -298,7 +307,10 @@ outer:
 		if err != nil {
 			return err
 		}
-		forwardTimestamp++
+
+		if preserveOrder {
+			forwardTimestamp++
+		}
 	}
 
 	return nil
