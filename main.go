@@ -5,33 +5,35 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
-	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/text/encoding/unicode"
 	"golang.org/x/text/transform"
 )
 
-//used for dir column
+// used for dir column
 var unknownDir string
 
-//used for host column
+// used for host column
 var hostName string
 
-//used for session column
+// used for session column
 var sessionNum = "0"
 
-//used for exit_status column
+// used for exit_status column
 var retVal = "0"
 
-//representation of a history entry
+// representation of a history entry
 type basicEntry struct {
 	started  string //no reason to convert to uint64
 	duration string
@@ -45,10 +47,10 @@ var boringCommands = strings.Join([]string{
 	"htop",
 }, ",")
 
-//location of database file
+// location of database file
 var databaseFile string
 
-//location of history file
+// location of history file
 var historyFile string
 
 func init() {
@@ -69,8 +71,8 @@ func init() {
 	flag.StringVar(&unknownDir, "dir", home, "directory used for command import")
 }
 
-//Reads the entry, traversing multiple lines if needed
-func readEntry(s *bufio.Scanner) (string, bool) {
+// Reads the entry, traversing multiple lines if needed
+func readEntry(s *bufio.Scanner, buf *bytes.Buffer) (string, bool, error) {
 	var ok bool
 	entry := ""
 	for {
@@ -78,6 +80,15 @@ func readEntry(s *bufio.Scanner) (string, bool) {
 		if !ok {
 			break
 		}
+
+		if buf != nil {
+			// write line back to buf to recreate scanner later
+			_, err := fmt.Fprintln(buf, s.Text())
+			if err != nil {
+				return "", false, err
+			}
+		}
+
 		entry += s.Text()
 		entryLen := len(entry)
 		if entryLen == 0 {
@@ -91,26 +102,27 @@ func readEntry(s *bufio.Scanner) (string, bool) {
 		}
 		break
 	}
-	return entry, ok
+	return entry, ok, nil
 }
 
-//Parses an entry string into a basicEntry
-func parseEntry(entry string) (basicEntry, error) {
-	data := strings.SplitN(entry, ";", 2)
-	if data == nil || len(data) != 2 {
-		return basicEntry{}, errors.New("Unable to parse entry= " + entry)
-	}
-	info := strings.Split(data[0], ":")
-	if info == nil || len(info) != 3 {
-		return basicEntry{}, errors.New("Unable to parse timestamp=" + data[0])
-	}
-	stamp := strings.TrimSpace(info[1])
-	duration := strings.TrimSpace(info[2])
-	cmd := data[1]
+// Parses an entry string into a basicEntry
+func parseEntry(entry string, timestamp int64) (basicEntry, error) {
+	//data := strings.SplitN(entry, ";", 2)
+	//if data == nil || len(data) != 2 {
+	//	return basicEntry{}, errors.New("Unable to parse entry= " + entry)
+	//}
+	//info := strings.Split(data[0], ":")
+	//if info == nil || len(info) != 3 {
+	//	return basicEntry{}, errors.New("Unable to parse timestamp=" + data[0])
+	//}
+
+	stamp := fmt.Sprintf("%d", time.Now().Unix())
+	//duration := strings.TrimSpace(info[2])
+	//cmd := data[1]
 	return basicEntry{
 		started:  stamp,
-		duration: duration,
-		cmd:      cmd,
+		duration: "0",
+		cmd:      entry,
 	}, nil
 }
 
@@ -220,7 +232,7 @@ func main() {
 	}
 	defer fd.Close()
 
-	err = readAndInsert(tx, fd)
+	err = readAndInsert(tx, fd, true)
 	if err != nil {
 		tx.Rollback()
 		log.Fatal(err)
@@ -232,28 +244,44 @@ func main() {
 	}
 }
 
-func readAndInsert(tx *transaction, r io.Reader) error {
+func readAndInsert(tx *transaction, r io.Reader, preserveOrder bool) (err error) {
+	var forwardTimestamp int64
+
+	// use currentTimestamp as timestamp for commands if histfile doesn't contain timestamp
+	currentTimestamp := time.Now().Unix()
+
 	r = transform.NewReader(r, unicode.UTF8.NewDecoder())
 	scanner := bufio.NewScanner(r)
 
 	bcs := strings.Split(boringCommands, ",")
 
+	// if preserving order, rewind currentTimestamp based on total inserted entry into db
+	if preserveOrder {
+		currentTimestamp, err = rewindTimestamp(scanner, bcs, currentTimestamp)
+	}
+
 outer:
 	for {
-		entry, ok := readEntry(scanner)
-		if !ok {
-			break
-		}
-		if entry == "" {
-			continue
-		}
-
-		err := scanner.Err()
-		if err != nil {
+		if err = scanner.Err(); err != nil {
 			return err
 		}
 
-		parsed, err := parseEntry(entry)
+		entry, ok, err := readEntry(scanner, nil)
+		switch {
+		case err != nil:
+			return err
+		case !ok:
+			break outer
+		case entry == "":
+			continue outer
+		}
+
+		// use forwardTimestamp to add second to currentTimestamp after rewinding
+		if preserveOrder {
+			currentTimestamp = currentTimestamp + forwardTimestamp
+		}
+
+		parsed, err := parseEntry(entry, currentTimestamp)
 		if err != nil {
 			return err
 		}
@@ -270,7 +298,50 @@ outer:
 		if err != nil {
 			return err
 		}
+		forwardTimestamp++
 	}
 
 	return nil
+}
+
+func rewindTimestamp(scanner *bufio.Scanner, bcs []string, currentTimestamp int64) (int64, error) {
+	var (
+		lineCount int64
+		buf       bytes.Buffer
+	)
+
+	// replicate loop of readAndInsert() to count total entry need to be inserted
+outer:
+	for {
+		if err := scanner.Err(); err != nil {
+			return 0, err
+		}
+
+		entry, ok, err := readEntry(scanner, &buf)
+		switch {
+		case err != nil:
+			return 0, err
+		case !ok:
+			break outer
+		case entry == "":
+			continue outer
+		}
+
+		parsed, err := parseEntry(entry, currentTimestamp)
+		if err != nil {
+			return 0, err
+		}
+
+		for _, bc := range bcs {
+			if parsed.cmd == bc {
+				continue outer
+			}
+		}
+
+		lineCount++
+	}
+
+	// recreate scanner after read
+	*scanner = *bufio.NewScanner(&buf)
+	return currentTimestamp - lineCount, nil
 }
