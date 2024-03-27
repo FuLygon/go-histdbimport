@@ -267,6 +267,9 @@ func readAndInsert(tx *transaction, r io.Reader, preserveOrder bool) (err error)
 	// if preserving order, rewind currentTimestamp based on total inserted entry into db
 	if preserveOrder {
 		currentTimestamp, err = rewindTimestamp(scanner, bcs, currentTimestamp)
+		if err != nil {
+			return err
+		}
 	}
 
 outer:
