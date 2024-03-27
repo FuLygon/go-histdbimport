@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,11 +109,17 @@ func readEntry(s *bufio.Scanner, buf *bytes.Buffer) (string, bool, error) {
 
 // Parses an entry string into a basicEntry
 func parseEntry(entry string, timestamp int64) (basicEntry, error) {
-	var entryInfo basicEntry
+	var (
+		data      []string
+		entryInfo basicEntry
+	)
 
-	data := strings.SplitN(entry, ";", 2)
-	if data == nil || len(data) != 2 {
-		return basicEntry{}, errors.New("Unable to parse entry= " + entry)
+	// if entry have timestamp data
+	if strings.HasPrefix(entry, ": ") {
+		data = strings.SplitN(entry, ";", 2)
+		if data == nil {
+			return basicEntry{}, errors.New("Unable to parse entry= " + entry)
+		}
 	}
 
 	if len(data) == 2 {
@@ -241,7 +248,15 @@ func main() {
 	}
 	defer fd.Close()
 
-	err = readAndInsert(tx, fd, true)
+	var preserveOrder bool
+	if strPreserveOrder := os.Getenv("PRESERVE_ORDER"); strPreserveOrder != "" {
+		preserveOrder, err = strconv.ParseBool(strPreserveOrder)
+		if err != nil {
+			log.Fatal("Invalid PRESERVE_ORDER value")
+		}
+	}
+
+	err = readAndInsert(tx, fd, preserveOrder)
 	if err != nil {
 		tx.Rollback()
 		log.Fatal(err)
@@ -254,8 +269,6 @@ func main() {
 }
 
 func readAndInsert(tx *transaction, r io.Reader, preserveOrder bool) (err error) {
-	var forwardTimestamp int64
-
 	// use currentTimestamp as timestamp for commands if histfile doesn't contain timestamp
 	currentTimestamp := time.Now().Unix()
 
@@ -288,11 +301,6 @@ outer:
 			continue outer
 		}
 
-		// use forwardTimestamp to add second to currentTimestamp after rewinding
-		if preserveOrder {
-			currentTimestamp = currentTimestamp + forwardTimestamp
-		}
-
 		parsed, err := parseEntry(entry, currentTimestamp)
 		if err != nil {
 			return err
@@ -311,8 +319,9 @@ outer:
 			return err
 		}
 
+		// add one second to current timestamp when preserving order
 		if preserveOrder {
-			forwardTimestamp++
+			currentTimestamp++
 		}
 	}
 
