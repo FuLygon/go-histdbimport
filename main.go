@@ -64,13 +64,31 @@ func init() {
 	if err != nil {
 		home = os.Getenv("HOME")
 	}
-	flag.StringVar(&databaseFile, "database", filepath.Join(home, ".histdb/zsh-history.db"),
-		"location of database file")
-	flag.StringVar(&historyFile, "history", filepath.Join(home, ".zsh_history"),
-		"location of history file")
+
+	dbPath, historyPath := getFilePath(home)
+	flag.StringVar(&databaseFile, "database", dbPath, "location of database file")
+	flag.StringVar(&historyFile, "history", historyPath, "location of history file")
 	flag.StringVar(&boringCommands, "ignore", boringCommands, "commands to ignore during import")
 	flag.StringVar(&hostName, "host", host, "value for host column")
 	flag.StringVar(&unknownDir, "dir", home, "directory used for command import")
+}
+
+func getFilePath(home string) (dbPath string, historyPath string) {
+	// read db path
+	if path := os.Getenv("DB_PATH"); path != "" {
+		dbPath = path
+	} else {
+		dbPath = filepath.Join(home, ".histdb/zsh-history.db")
+	}
+
+	// read history path
+	if path := os.Getenv("HISTORY_PATH"); path != "" {
+		historyPath = path
+	} else {
+		historyPath = filepath.Join(home, ".zsh_history")
+	}
+
+	return
 }
 
 // Reads the entry, traversing multiple lines if needed
@@ -319,7 +337,7 @@ outer:
 			return err
 		}
 
-		// add one second to current timestamp when preserving order
+		// fast-forward current timestamp if preserving order
 		if preserveOrder {
 			currentTimestamp++
 		}
